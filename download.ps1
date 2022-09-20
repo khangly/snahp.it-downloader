@@ -1,10 +1,19 @@
-﻿New-Variable -Name ZIPPYSCRAPER -Description "Zippyshare Scraper" -Option Constant -Value .\zippyshare-scraper\zippyshare.py
-New-Variable -Name DOWN_JSON -Description "Download links" -Option Constant -Value .\down.json
+﻿param ($downFilename = '.\down.json', $concurrentFiles = 2)
+
+New-Variable -Name ZIPPYSCRAPER -Description "Zippyshare Scraper" -Option Constant -Value .\zippyshare-scraper\zippyshare.py
 New-Variable -Name DOWN_TEMP -Description "Temporary links" -Option Constant -Value .\temp.txt
 New-Variable -Name DOWN_GENERATED -Description "Generated links" -Option Constant -Value .\links.txt
-New-Variable -Name CONCURRENT_FILES -Description "Number of files to download each iteration" -Option Constant -Value 2
-$down_file = Get-Content $DOWN_JSON | ConvertFrom-Json
-$files = $down_file.Content.Package.Files
+
+$is_json = (Get-Item $downFilename).Extension -eq '.json'
+if ($is_json)
+{
+    $down_file = Get-Content $downFilename | ConvertFrom-Json
+    $files = $down_file.Content.Package.Files
+}
+else
+{
+    $files = Get-Content $downFilename
+}
 
 function Wait-BitsTransfer {
     param (
@@ -20,19 +29,29 @@ function Wait-BitsTransfer {
 $i = 0
 try
 {
-    for (; $i -lt $files.Count; $i += $CONCURRENT_FILES)
+    for (; $i -lt $files.Count; $i += $concurrentFiles)
     {
-        $to_download = $files[$i..($i + $CONCURRENT_FILES - 1)]
-        $to_download.URL | Out-File $DOWN_TEMP -Encoding default
+        $to_download = $files[$i..($i + $concurrentFiles - 1)]
+        $urls = if ($is_json) {$to_download.URL} else {$to_download}
+        $urls | Out-File $DOWN_TEMP -Encoding default
         python $ZIPPYSCRAPER --in-file $DOWN_TEMP
-        $job = Start-BitsTransfer (Get-Content $DOWN_GENERATED) -DisplayName $to_download[0].Filename -Asynchronous
+        $display_name = if ($is_json) {$to_download[0].Filename} else {$i}
+        $job = Start-BitsTransfer (Get-Content $DOWN_GENERATED) -DisplayName $display_name -Asynchronous
         Wait-BitsTransfer $job
     }
 }
 finally
 {
-    $down_file.Content.Package.Files = $files[($i + $CONCURRENT_FILES)..($files.Count - 1)]
-    ConvertTo-Json $down_file -Depth 4 -Compress > $DOWN_JSON
+    $files = $files[($i + $concurrentFiles)..($files.Count - 1)]
+    if ($is_json)
+    {
+        $down_file.Content.Package.Files = $files
+        ConvertTo-Json $down_file -Depth 4 -Compress > $downFilename
+    }
+    else
+    {
+        $files > $downFilename
+    }
     $shutdown = Read-Host 'Shut down after the last download? (Press "d" to sleep)'
     Wait-BitsTransfer $job
     if ($shutdown)
